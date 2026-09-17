@@ -11,11 +11,22 @@ from google import genai
 from google.genai import types
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 ADMIN_ID = os.environ.get("ADMIN_ID", "").strip()
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 
+GEMINI_KEYS = []
+for i in range(1, 6):
+    key = os.environ.get(f"GEMINI_API_KEY_{i}", "").strip()
+    if key:
+        GEMINI_KEYS.append(key)
+
+if not GEMINI_KEYS:
+    single = os.environ.get("GEMINI_API_KEY", "").strip()
+    if single:
+        GEMINI_KEYS.append(single)
+
 print(f"ADMIN_ID = '{ADMIN_ID}' (len={len(ADMIN_ID)})")
+print(f"تعداد کلیدهای Gemini: {len(GEMINI_KEYS)}")
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 DB_NAME = "bot.db"
@@ -24,11 +35,7 @@ CACHE_TTL = 300
 MAX_CHATS = 100
 RATE_LIMIT = 4
 GEMINI_MIN_INTERVAL = 4
-
-client = genai.Client(
-    api_key=GEMINI_API_KEY,
-    http_options=types.HttpOptions(api_version="v1")
-)
+GEMINI_MODEL = "gemini-2.5-flash"
 
 http_session = requests.Session()
 _adapter = HTTPAdapter(
@@ -45,9 +52,26 @@ _mode_cache = {}
 _blocked_cache = {}
 user_chats = {}
 last_answers = {}
-_locks = {}
 GEMINI_LOCK = threading.Lock()
 _last_gemini_call = [0]
+_key_index = [0]
+
+
+def _get_clients():
+    clients = []
+    for key in GEMINI_KEYS:
+        try:
+            c = genai.Client(
+                api_key=key,
+                http_options=types.HttpOptions(api_version="v1")
+            )
+            clients.append(c)
+        except Exception as e:
+            print(f"خطا تو ساخت کلاینت: {e}")
+    return clients
+
+
+gemini_clients = _get_clients()
 
 
 def _cache_get(cache, key):
@@ -328,12 +352,13 @@ def check_rate_limit(user_id):
         conn.close()
 
 
-def get_user_chat(user_id):
-    if user_id not in user_chats:
-        user_chats[user_id] = client.chats.create(
-            model="gemini-3.5-flash"
+def get_user_chat(user_id, client):
+    key = f"{user_id}_{id(client)}"
+    if key not in user_chats:
+        user_chats[key] = client.chats.create(
+            model=GEMINI_MODEL
         )
-    return user_chats[user_id]
+    return user_chats[key]
 
 
 def tg_request(method, payload, timeout=15):
@@ -462,76 +487,98 @@ def _wait_for_gemini_slot():
         _last_gemini_call[0] = time.time()
 
 
-def ask_gemini(user_id, user_text):
-    _wait_for_gemini_slot()
-    max_retries = 3
-    for attempt in range(max_retries):
+def _is_quota_error(err_str):
+    return (
+        "429" in err_str or
+        "RESOURCE_EXHAUSTED" in err_str or
+        "quota" in err_str.lower() or
+        "exceeded" in err_str.lower()
+    )
+
+
+def _try_all_keys(func):
+    total = len(gemini_clients)
+    if total == 0:
+        return None, "کلید Gemini تنظیم نشده."
+    start_index = _key_index[0]
+    last_error = None
+    for offset in range(total):
+        idx = (start_index + offset) % total
         try:
-            mode = get_user_mode(user_id)
-            system_prompt = MODES.get(mode, MODES["default"])
-            chat = get_user_chat(user_id)
-            full_prompt = (
-                f"{system_prompt}\n\nسوال کاربر: {user_text}"
-            )
-            response = chat.send_message(full_prompt)
-            if response and response.text:
-                return response.text.strip()
-            return "متأسفانه نتونستم جواب بدم."
+            result = func(gemini_clients[idx])
+            _key_index[0] = idx
+            return result, None
         except Exception as e:
             err_str = str(e)
-            print(f"[ask_gemini] تلاش {attempt + 1} خطا: {err_str}")
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                if attempt < max_retries - 1:
-                    time.sleep(2 * (attempt + 1))
-                    continue
-                return (
-                    "سرور AI شلوغه! "
-                    "لطفاً چند لحظه صبر کن و دوباره امتحان کن."
-                )
-            if attempt < max_retries - 1:
-                user_chats.pop(user_id, None)
+            print(f"[key_rotation] کلید {idx + 1} خطا: {err_str[:150]}")
+            last_error = err_str
+            if _is_quota_error(err_str):
                 time.sleep(1)
                 continue
-            return "متأسفانه یه خطا پیش اومد. دوباره امتحان کن."
+            continue
+    return None, last_error or "همه‌ی کلیدها با خطا مواجه شدند."
+
+
+def ask_gemini(user_id, user_text):
+    _wait_for_gemini_slot()
+    mode = get_user_mode(user_id)
+    system_prompt = MODES.get(mode, MODES["default"])
+    full_prompt = (
+        f"{system_prompt}\n\nسوال کاربر: {user_text}"
+    )
+
+    def _call(c):
+        chat = get_user_chat(user_id, c)
+        response = chat.send_message(full_prompt)
+        if response and response.text:
+            return response.text.strip()
+        raise Exception("پاسخ خالی از Gemini")
+
+    result, err = _try_all_keys(_call)
+    if result:
+        return result
+    print(f"[ask_gemini] همه کلیدها خطا: {err}")
+    return "سرور AI موقتاً پاسخگو نیست. لطفاً چند دقیقه دیگه امتحان کن."
 
 
 def ask_gemini_with_image(user_id, image_bytes,
                           mime_type, caption=""):
     _wait_for_gemini_slot()
-    try:
-        mode = get_user_mode(user_id)
-        system_prompt = MODES.get(mode, MODES["default"])
-        if caption and caption.strip():
-            prompt = (
-                f"{system_prompt}\n\n"
-                f"کاربر این عکس رو فرستاده و این متن رو هم نوشته:\n"
-                f"«{caption}»\n\n"
-                f"لطفاً هم عکس رو تحلیل کن، هم به این متن پاسخ بده."
-            )
-        else:
-            prompt = (
-                f"{system_prompt}\n\n"
-                f"کاربر این عکس رو فرستاده (بدون متن).\n"
-                f"لطفاً عکس رو کامل تحلیل کن:\n"
-                f"- چی تو عکس می‌بینی؟\n"
-                f"- اگه متن داره، بخونش\n"
-                f"- جزئیات مهم رو توضیح بده"
-            )
-        image_part = types.Part.from_bytes(
-            data=image_bytes,
-            mime_type=mime_type
+    mode = get_user_mode(user_id)
+    system_prompt = MODES.get(mode, MODES["default"])
+    if caption and caption.strip():
+        prompt = (
+            f"{system_prompt}\n\n"
+            f"کاربر این عکس رو فرستاده و این متن رو هم نوشته:\n"
+            f"«{caption}»\n\n"
+            f"لطفاً هم عکس رو تحلیل کن، هم به این متن پاسخ بده."
         )
-        chat = get_user_chat(user_id)
+    else:
+        prompt = (
+            f"{system_prompt}\n\n"
+            f"کاربر این عکس رو فرستاده (بدون متن).\n"
+            f"لطفاً عکس رو کامل تحلیل کن:\n"
+            f"- چی تو عکس می‌بینی؟\n"
+            f"- اگه متن داره، بخونش\n"
+            f"- جزئیات مهم رو توضیح بده"
+        )
+    image_part = types.Part.from_bytes(
+        data=image_bytes,
+        mime_type=mime_type
+    )
+
+    def _call(c):
+        chat = get_user_chat(user_id, c)
         response = chat.send_message([image_part, prompt])
         if response and response.text:
             return response.text.strip()
-        return "متأسفانه نتونستم عکس رو تحلیل کنم."
-    except Exception as e:
-        err_str = str(e)
-        print(f"[ask_gemini_with_image] خطای کامل: {err_str}")
-        import traceback
-        traceback.print_exc()
-        return f"خطا: {err_str[:250]}"
+        raise Exception("پاسخ خالی از Gemini")
+
+    result, err = _try_all_keys(_call)
+    if result:
+        return result
+    print(f"[ask_gemini_with_image] همه کلیدها خطا: {err}")
+    return "سرور AI موقتاً پاسخگو نیست. لطفاً چند دقیقه دیگه امتحان کن."
 
 
 def notify_admin_text(user_id, username,
@@ -883,7 +930,9 @@ def webhook():
             return "OK", 200
 
         if text == "/clear":
-            user_chats.pop(user_id, None)
+            for k in list(user_chats.keys()):
+                if k.startswith(f"{user_id}_"):
+                    user_chats.pop(k, None)
             tg_send_message(
                 chat_id,
                 "حافظه‌ی مکالمه پاک شد."
