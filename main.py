@@ -50,12 +50,6 @@ GEMINI_LOCK = threading.Lock()
 _last_gemini_call = [0]
 
 
-def _get_lock(key):
-    if key not in _locks:
-        _locks[key] = threading.Lock()
-    return _locks[key]
-
-
 def _cache_get(cache, key):
     if key in cache:
         value, ts = cache[key]
@@ -533,8 +527,11 @@ def ask_gemini_with_image(user_id, image_bytes,
             return response.text.strip()
         return "متأسفانه نتونستم عکس رو تحلیل کنم."
     except Exception as e:
-        print(f"[ask_gemini_with_image] خطا: {e}")
-        return "متأسفانه یه خطا تو تحلیل عکس پیش اومد."
+        err_str = str(e)
+        print(f"[ask_gemini_with_image] خطای کامل: {err_str}")
+        import traceback
+        traceback.print_exc()
+        return f"خطا: {err_str[:250]}"
 
 
 def notify_admin_text(user_id, username,
