@@ -23,6 +23,7 @@ MAX_PHOTO_SIZE = 5 * 1024 * 1024
 CACHE_TTL = 300
 MAX_CHATS = 100
 RATE_LIMIT = 4
+GEMINI_MIN_INTERVAL = 4
 
 client = genai.Client(
     api_key=GEMINI_API_KEY,
@@ -45,6 +46,8 @@ _blocked_cache = {}
 user_chats = {}
 last_answers = {}
 _locks = {}
+GEMINI_LOCK = threading.Lock()
+_last_gemini_call = [0]
 
 
 def _get_lock(key):
@@ -455,8 +458,19 @@ MODE_NAMES = {
 }
 
 
+def _wait_for_gemini_slot():
+    with GEMINI_LOCK:
+        now = time.time()
+        elapsed = now - _last_gemini_call[0]
+        if elapsed < GEMINI_MIN_INTERVAL:
+            wait_time = GEMINI_MIN_INTERVAL - elapsed
+            time.sleep(wait_time)
+        _last_gemini_call[0] = time.time()
+
+
 def ask_gemini(user_id, user_text):
-    max_retries = 2
+    _wait_for_gemini_slot()
+    max_retries = 3
     for attempt in range(max_retries):
         try:
             mode = get_user_mode(user_id)
@@ -474,18 +488,22 @@ def ask_gemini(user_id, user_text):
             print(f"[ask_gemini] تلاش {attempt + 1} خطا: {err_str}")
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                 if attempt < max_retries - 1:
-                    time.sleep(1)
+                    time.sleep(2 * (attempt + 1))
                     continue
-                return "محدودیت درخواست! کمی صبر کن."
+                return (
+                    "سرور AI شلوغه! "
+                    "لطفاً چند لحظه صبر کن و دوباره امتحان کن."
+                )
             if attempt < max_retries - 1:
                 user_chats.pop(user_id, None)
-                time.sleep(0.5)
+                time.sleep(1)
                 continue
-            return "متأسفانه یه خطا پیش اومد."
+            return "متأسفانه یه خطا پیش اومد. دوباره امتحان کن."
 
 
 def ask_gemini_with_image(user_id, image_bytes,
                           mime_type, caption=""):
+    _wait_for_gemini_slot()
     try:
         mode = get_user_mode(user_id)
         system_prompt = MODES.get(mode, MODES["default"])
@@ -900,7 +918,7 @@ def webhook():
         if not check_rate_limit(user_id):
             tg_send_message(
                 chat_id,
-                "محدودیت! هر دقیقه فقط ۴ پیام."
+                "شما هر دقیقه فقط ۴ پیام می‌تونید بفرستید. لطفاً کمی صبر کنید."
             )
             return "OK", 200
 
