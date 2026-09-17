@@ -40,6 +40,12 @@ GEMINI_MIN_INTERVAL = 2
 GEMINI_MODEL = "gemini-3.6-flash"
 MIN_DISPLAY_TIME = 1.5
 
+SPAM_REPEAT_LIMIT = 3
+SPAM_SHORT_LIMIT = 8
+SPAM_BLOCK_TIME_SHORT = 30
+SPAM_BLOCK_TIME_LONG = 300
+SPAM_WINDOW = 60
+
 http_session = requests.Session()
 _adapter = HTTPAdapter(
     pool_connections=20,
@@ -93,6 +99,10 @@ answers_ts = {}
 GEMINI_LOCK = threading.Lock()
 _last_gemini_call = [0]
 _key_index = [0]
+
+user_message_history = {}
+user_spam_state = {}
+spam_lock = threading.Lock()
 
 
 def _get_clients():
@@ -406,6 +416,85 @@ def check_rate_limit(user_id):
         return True
     finally:
         conn.close()
+
+
+def check_spam(user_id, text):
+    now = time.time()
+    with spam_lock:
+        state = user_spam_state.get(user_id)
+        if state and state.get("until", 0) > now:
+            remaining = int(state["until"] - now)
+            return {
+                "action": "blocked",
+                "remaining": remaining,
+                "reason": state.get("reason", "spam")
+            }
+
+        if state and state.get("until", 0) <= now:
+            user_spam_state.pop(user_id, None)
+            state = None
+
+        history = user_message_history.get(user_id, [])
+        history = [h for h in history if now - h["ts"] < SPAM_WINDOW]
+
+        text_clean = text.strip().lower()
+
+        recent_texts = [h["text"] for h in history[-SPAM_REPEAT_LIMIT:]]
+        repeat_count = sum(
+            1 for t in recent_texts if t == text_clean
+        )
+
+        if repeat_count >= SPAM_REPEAT_LIMIT - 1 and len(text_clean) > 0:
+            user_spam_state[user_id] = {
+                "until": now + SPAM_BLOCK_TIME_SHORT,
+                "reason": "repeat"
+            }
+            user_message_history[user_id] = history
+            return {
+                "action": "blocked",
+                "remaining": SPAM_BLOCK_TIME_SHORT,
+                "reason": "repeat"
+            }
+
+        if len(history) >= SPAM_SHORT_LIMIT:
+            user_spam_state[user_id] = {
+                "until": now + SPAM_BLOCK_TIME_LONG,
+                "reason": "flood"
+            }
+            user_message_history[user_id] = history
+            return {
+                "action": "blocked",
+                "remaining": SPAM_BLOCK_TIME_LONG,
+                "reason": "flood"
+            }
+
+        history.append({
+            "text": text_clean,
+            "ts": now
+        })
+        user_message_history[user_id] = history
+
+        if len(history) >= SPAM_REPEAT_LIMIT + 1:
+            return {"action": "warn", "remaining": 0}
+
+        return {"action": "ok", "remaining": 0}
+
+
+def _get_spam_message(result):
+    reason = result.get("reason", "")
+    remaining = result.get("remaining", 0)
+
+    if reason == "repeat":
+        return (
+            f"🚫 لطفاً پیام تکراری نفرست!\n"
+            f"⏳ {remaining} ثانیه صبر کن، بعد دوباره امتحان کن."
+        )
+    elif reason == "flood":
+        return (
+            f"🚫 خیلی سریع پیام فرستادی!\n"
+            f"⏳ {remaining // 60} دقیقه صبر کن، بعد دوباره امتحان کن."
+        )
+    return "🚫 لطفاً کمی صبر کن."
 
 
 def get_user_chat(user_id, client_index):
@@ -964,6 +1053,16 @@ def webhook():
             )
             return "OK", 200
 
+        spam_check_text = text if text else (caption or "[عکس]")
+        spam_result = check_spam(user_id, spam_check_text)
+
+        if spam_result["action"] == "blocked":
+            tg_send_message(
+                chat_id,
+                _get_spam_message(spam_result)
+            )
+            return "OK", 200
+
         if photo:
             handle_photo(
                 message, chat_id, user_id,
@@ -991,6 +1090,8 @@ def webhook():
             for k in list(user_chats.keys()):
                 if k.startswith(f"{user_id}_"):
                     user_chats.pop(k, None)
+            user_message_history.pop(user_id, None)
+            user_spam_state.pop(user_id, None)
             tg_send_message(
                 chat_id,
                 "🧹 حافظه‌ی مکالمه پاک شد."
