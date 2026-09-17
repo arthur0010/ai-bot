@@ -35,7 +35,7 @@ CACHE_TTL = 300
 MAX_CHATS = 100
 RATE_LIMIT = 4
 GEMINI_MIN_INTERVAL = 4
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 
 http_session = requests.Session()
 _adapter = HTTPAdapter(
