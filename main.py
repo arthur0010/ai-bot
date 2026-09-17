@@ -32,9 +32,9 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 DB_NAME = "bot.db"
 MAX_PHOTO_SIZE = 5 * 1024 * 1024
 CACHE_TTL = 300
-ANSWER_TTL = 600
+ANSWER_TTL = 3600
 MAX_CHATS = 100
-MAX_ANSWERS = 200
+MAX_ANSWERS = 500
 RATE_LIMIT = 5
 GEMINI_MIN_INTERVAL = 2
 GEMINI_MODEL = "gemini-3.6-flash"
@@ -157,15 +157,18 @@ def _cleanup_cache():
         last_answers.pop(k, None)
         answers_ts.pop(k, None)
     if len(last_answers) > MAX_ANSWERS:
-        keys = list(last_answers.keys())
+        keys = sorted(
+            last_answers.keys(),
+            key=lambda x: answers_ts.get(x, 0)
+        )
         for k in keys[:len(keys) // 2]:
             last_answers.pop(k, None)
             answers_ts.pop(k, None)
 
 
-def _save_answer(user_id, answer):
-    last_answers[user_id] = answer
-    answers_ts[user_id] = time.time()
+def _save_answer(admin_msg_id, answer):
+    last_answers[admin_msg_id] = answer
+    answers_ts[admin_msg_id] = time.time()
 
 
 def _db_connect():
@@ -709,7 +712,7 @@ def ask_gemini_with_image(user_id, image_bytes,
 def notify_admin_text(user_id, username,
                       full_name, message_text):
     if not ADMIN_ID:
-        return
+        return None
     preview = message_text[:100]
     if len(message_text) > 100:
         preview += "..."
@@ -732,13 +735,16 @@ def notify_admin_text(user_id, username,
               "callback_data": f"block:{user_id}"}]
         ]
     }
-    tg_send_message(ADMIN_ID, text, reply_markup=reply_markup)
+    result = tg_send_message(ADMIN_ID, text, reply_markup=reply_markup)
+    if result and result.get("ok"):
+        return result["result"]["message_id"]
+    return None
 
 
 def notify_admin_photo(user_id, username, full_name,
                        caption, from_chat_id, message_id):
     if not ADMIN_ID:
-        return
+        return None
     reply_markup = {
         "inline_keyboard": [
             [{"text": "🤖 جواب ربات",
@@ -758,11 +764,14 @@ def notify_admin_photo(user_id, username, full_name,
     )
     if caption and caption.strip():
         header += f"\n➖➖➖➖➖➖➖➖\n💬 کپشن: {caption[:150]}"
-    tg_send_message(ADMIN_ID, header)
+    result = tg_send_message(ADMIN_ID, header)
     tg_copy_message(
         ADMIN_ID, from_chat_id,
         message_id, reply_markup=reply_markup
     )
+    if result and result.get("ok"):
+        return result["result"]["message_id"]
+    return None
 
 
 def handle_callback(cb):
@@ -813,11 +822,12 @@ def handle_callback(cb):
         )
 
     elif data.startswith("answer:"):
-        target_user_id = int(data.split(":")[1])
-        answer = last_answers.get(target_user_id)
+        admin_msg_id = message_id
+        answer = last_answers.get(admin_msg_id)
+        user_id_data = data.split(":")[1]
         if answer:
             text = (
-                f"🤖 جواب ربات به کاربر {target_user_id}:\n"
+                f"🤖 جواب ربات به کاربر {user_id_data}:\n"
                 f"➖➖➖➖➖➖➖➖\n"
                 f"{answer}"
             )
@@ -825,7 +835,7 @@ def handle_callback(cb):
         else:
             tg_send_message(
                 ADMIN_ID,
-                f"⚠️ هنوز جوابی برای کاربر {target_user_id} ثبت نشده."
+                f"⚠️ هنوز جوابی برای این پیام ثبت نشده."
             )
 
 
@@ -924,9 +934,14 @@ def handle_text(message, chat_id, user_id,
     if processing_msg and processing_msg.get("ok"):
         processing_msg_id = processing_msg["result"]["message_id"]
 
+    admin_msg_id_holder = [None]
+
     def _notify_bg():
         try:
-            notify_admin_text(user_id, username, full_name, text)
+            msg_id = notify_admin_text(
+                user_id, username, full_name, text
+            )
+            admin_msg_id_holder[0] = msg_id
         except Exception as e:
             print(f"[notify_bg] خطا: {e}", flush=True)
 
@@ -934,12 +949,15 @@ def handle_text(message, chat_id, user_id,
     notify_thread.start()
 
     answer = ask_gemini(user_id, text)
+    notify_thread.join(timeout=5)
 
     elapsed = time.time() - start_time
     if elapsed < MIN_DISPLAY_TIME:
         time.sleep(MIN_DISPLAY_TIME - elapsed)
 
-    _save_answer(user_id, answer)
+    admin_msg_id = admin_msg_id_holder[0]
+    if admin_msg_id:
+        _save_answer(admin_msg_id, answer)
 
     final_text = f"🤖 پیام ربات:\n➖➖➖➖➖➖➖➖\n{answer}"
 
@@ -966,12 +984,15 @@ def handle_photo(message, chat_id, user_id, username,
     largest_photo = photo[-1]
     file_id = largest_photo["file_id"]
 
+    admin_msg_id_holder = [None]
+
     def _notify_bg():
         try:
-            notify_admin_photo(
+            msg_id = notify_admin_photo(
                 user_id, username, full_name, caption,
                 chat_id, message["message_id"]
             )
+            admin_msg_id_holder[0] = msg_id
         except Exception as e:
             print(f"[notify_bg_photo] خطا: {e}", flush=True)
 
@@ -1008,12 +1029,15 @@ def handle_photo(message, chat_id, user_id, username,
     answer = ask_gemini_with_image(
         user_id, image_bytes, mime_type, caption
     )
+    notify_thread.join(timeout=5)
 
     elapsed = time.time() - start_time
     if elapsed < MIN_DISPLAY_TIME:
         time.sleep(MIN_DISPLAY_TIME - elapsed)
 
-    _save_answer(user_id, answer)
+    admin_msg_id = admin_msg_id_holder[0]
+    if admin_msg_id:
+        _save_answer(admin_msg_id, answer)
 
     final_text = f"🤖 پیام ربات:\n➖➖➖➖➖➖➖➖\n{answer}"
 
