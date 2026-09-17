@@ -59,19 +59,21 @@ _key_index = [0]
 
 def _get_clients():
     clients = []
-    for key in GEMINI_KEYS:
+    for i, key in enumerate(GEMINI_KEYS):
         try:
             c = genai.Client(
                 api_key=key,
                 http_options=types.HttpOptions(api_version="v1")
             )
             clients.append(c)
+            print(f"✅ کلاینت {i + 1} ساخته شد (کلید: {key[:10]}...)")
         except Exception as e:
-            print(f"خطا تو ساخت کلاینت: {e}")
+            print(f"❌ خطا تو ساخت کلاینت {i + 1}: {e}")
     return clients
 
 
 gemini_clients = _get_clients()
+print(f"🔑 تعداد کلاینت‌های فعال: {len(gemini_clients)}")
 
 
 def _cache_get(cache, key):
@@ -498,6 +500,7 @@ def _is_quota_error(err_str):
 
 def _try_all_keys(func):
     total = len(gemini_clients)
+    print(f"[key_rotation] شروع چرخش بین {total} کلید")
     if total == 0:
         return None, "کلید Gemini تنظیم نشده."
     start_index = _key_index[0]
@@ -505,12 +508,14 @@ def _try_all_keys(func):
     for offset in range(total):
         idx = (start_index + offset) % total
         try:
+            print(f"[key_rotation] تلاش با کلید {idx + 1}")
             result = func(gemini_clients[idx])
+            print(f"[key_rotation] ✅ کلید {idx + 1} موفق شد")
             _key_index[0] = idx
             return result, None
         except Exception as e:
             err_str = str(e)
-            print(f"[key_rotation] کلید {idx + 1} خطا: {err_str[:150]}")
+            print(f"[key_rotation] ❌ کلید {idx + 1} خطا: {err_str[:300]}")
             last_error = err_str
             if _is_quota_error(err_str):
                 time.sleep(1)
