@@ -25,8 +25,8 @@ if not GEMINI_KEYS:
     if single:
         GEMINI_KEYS.append(single)
 
-print(f"ADMIN_ID = '{ADMIN_ID}' (len={len(ADMIN_ID)})")
-print(f"تعداد کلیدهای Gemini: {len(GEMINI_KEYS)}")
+print(f"ADMIN_ID = '{ADMIN_ID}' (len={len(ADMIN_ID)})", flush=True)
+print(f"تعداد کلیدهای Gemini: {len(GEMINI_KEYS)}", flush=True)
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 DB_NAME = "bot.db"
@@ -66,14 +66,14 @@ def _get_clients():
                 http_options=types.HttpOptions(api_version="v1")
             )
             clients.append(c)
-            print(f"✅ کلاینت {i + 1} ساخته شد (کلید: {key[:10]}...)")
+            print(f"✅ کلاینت {i + 1} ساخته شد", flush=True)
         except Exception as e:
-            print(f"❌ خطا تو ساخت کلاینت {i + 1}: {e}")
+            print(f"❌ خطا تو ساخت کلاینت {i + 1}: {e}", flush=True)
     return clients
 
 
 gemini_clients = _get_clients()
-print(f"🔑 تعداد کلاینت‌های فعال: {len(gemini_clients)}")
+print(f"🔑 تعداد کلاینت‌های فعال: {len(gemini_clients)}", flush=True)
 
 
 def _cache_get(cache, key):
@@ -369,7 +369,7 @@ def tg_request(method, payload, timeout=15):
         r = http_session.post(url, json=payload, timeout=timeout)
         return r.json()
     except Exception as e:
-        print(f"[tg_request:{method}] خطا: {e}")
+        print(f"[tg_request:{method}] خطا: {e}", flush=True)
         return None
 
 
@@ -443,7 +443,7 @@ def tg_get_file(file_id):
         file_bytes = http_session.get(file_url, timeout=30).content
         return file_bytes, file_path, file_size
     except Exception as e:
-        print(f"[tg_get_file] خطا: {e}")
+        print(f"[tg_get_file] خطا: {e}", flush=True)
         return None, None, 0
 
 
@@ -500,7 +500,8 @@ def _is_quota_error(err_str):
 
 def _try_all_keys(func):
     total = len(gemini_clients)
-    print(f"[key_rotation] شروع چرخش بین {total} کلید")
+    print("=" * 50, flush=True)
+    print(f"[key_rotation] شروع چرخش بین {total} کلید", flush=True)
     if total == 0:
         return None, "کلید Gemini تنظیم نشده."
     start_index = _key_index[0]
@@ -508,20 +509,24 @@ def _try_all_keys(func):
     for offset in range(total):
         idx = (start_index + offset) % total
         try:
-            print(f"[key_rotation] تلاش با کلید {idx + 1}")
+            print(f"[key_rotation] تلاش با کلید {idx + 1}...", flush=True)
             result = func(gemini_clients[idx])
-            print(f"[key_rotation] ✅ کلید {idx + 1} موفق شد")
+            print(f"[key_rotation] ✅ کلید {idx + 1} موفق شد", flush=True)
+            print("=" * 50, flush=True)
             _key_index[0] = idx
             return result, None
         except Exception as e:
             err_str = str(e)
-            print(f"[key_rotation] ❌ کلید {idx + 1} خطا: {err_str[:300]}")
+            print(f"[key_rotation] ❌ کلید {idx + 1} خطا:", flush=True)
+            print(err_str[:500], flush=True)
+            print("-" * 50, flush=True)
             last_error = err_str
             if _is_quota_error(err_str):
                 time.sleep(1)
                 continue
             continue
-    return None, last_error or "همه‌ی کلیدها با خطا مواجه شدند."
+    print("=" * 50, flush=True)
+    return None, last_error or "همه‌ی کلیدها خطا دادند."
 
 
 def ask_gemini(user_id, user_text):
@@ -542,8 +547,9 @@ def ask_gemini(user_id, user_text):
     result, err = _try_all_keys(_call)
     if result:
         return result
-    print(f"[ask_gemini] همه کلیدها خطا: {err}")
-    return "سرور AI موقتاً پاسخگو نیست. لطفاً چند دقیقه دیگه امتحان کن."
+    print(f"[ask_gemini] خطای نهایی: {err}", flush=True)
+    short_err = err[:200] if err else "نامشخص"
+    return f"خطای AI:\n\n{short_err}"
 
 
 def ask_gemini_with_image(user_id, image_bytes,
@@ -582,8 +588,9 @@ def ask_gemini_with_image(user_id, image_bytes,
     result, err = _try_all_keys(_call)
     if result:
         return result
-    print(f"[ask_gemini_with_image] همه کلیدها خطا: {err}")
-    return "سرور AI موقتاً پاسخگو نیست. لطفاً چند دقیقه دیگه امتحان کن."
+    print(f"[ask_gemini_with_image] خطای نهایی: {err}", flush=True)
+    short_err = err[:200] if err else "نامشخص"
+    return f"خطای AI:\n\n{short_err}"
 
 
 def notify_admin_text(user_id, username,
@@ -980,7 +987,7 @@ def webhook():
         return "OK", 200
 
     except Exception as e:
-        print(f"[webhook] خطا: {e}")
+        print(f"[webhook] خطا: {e}", flush=True)
         import traceback
         traceback.print_exc()
         return "OK", 200
@@ -990,7 +997,7 @@ def setup_webhook():
     if not RENDER_URL:
         return
     webhook_url = f"{RENDER_URL}/webhook"
-    print(f"Webhook: {webhook_url}")
+    print(f"Webhook: {webhook_url}", flush=True)
     try:
         http_session.get(
             f"{TELEGRAM_API}/deleteWebhook",
@@ -1005,9 +1012,9 @@ def setup_webhook():
             ]
         }
         r = http_session.get(url, params=params, timeout=15)
-        print(f"Webhook ست شد: {r.json()}")
+        print(f"Webhook ست شد: {r.json()}", flush=True)
     except Exception as e:
-        print(f"خطا: {e}")
+        print(f"خطا: {e}", flush=True)
 
 
 if __name__ == "__main__":
