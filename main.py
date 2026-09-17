@@ -34,7 +34,7 @@ MAX_PHOTO_SIZE = 5 * 1024 * 1024
 CACHE_TTL = 300
 MAX_CHATS = 100
 RATE_LIMIT = 4
-GEMINI_MIN_INTERVAL = 4
+GEMINI_MIN_INTERVAL = 2
 GEMINI_MODEL = "gemini-3.6-flash"
 
 http_session = requests.Session()
@@ -450,15 +450,18 @@ def tg_get_file(file_id):
 MODES = {
     "default": (
         "تو یه دستیار هوشمند، مفید و خوش‌برخورد هستی. "
-        "همیشه به زبان فارسی و واضح جواب بده."
+        "همیشه به زبان فارسی و واضح جواب بده. "
+        "برای جذاب‌تر شدن، از ایموجی‌های مناسب استفاده کن."
     ),
     "coder": (
         "تو یه برنامه‌نویس حرفه‌ای هستی. "
-        "به سوالات برنامه‌نویسی با کد و توضیح کامل جواب بده."
+        "به سوالات برنامه‌نویسی با کد و توضیح کامل جواب بده. "
+        "برای جذاب‌تر شدن، از ایموجی‌های مناسب استفاده کن."
     ),
     "poet": (
         "تو یه شاعر فارسی‌زبان هستی. "
-        "جواب‌هات رو به صورت شعر و ادبی بده."
+        "جواب‌هات رو به صورت شعر و ادبی بده. "
+        "برای زیبایی بیشتر، از ایموجی‌های شاعرانه استفاده کن."
     ),
     "translator": (
         "تو یه مترجم حرفه‌ای هستی. "
@@ -466,16 +469,17 @@ MODES = {
     ),
     "teacher": (
         "تو یه معلم صبور و دقیق هستی. "
-        "مفاهیم رو ساده و با مثال توضیح بده."
+        "مفاهیم رو ساده و با مثال توضیح بده. "
+        "برای جذاب‌تر شدن، از ایموجی‌های آموزشی استفاده کن."
     ),
 }
 
 MODE_NAMES = {
-    "default": "پیش‌فرض",
-    "coder": "برنامه‌نویس",
-    "poet": "شاعر",
-    "translator": "مترجم",
-    "teacher": "معلم",
+    "default": "🤖 پیش‌فرض",
+    "coder": "💻 برنامه‌نویس",
+    "poet": "🌹 شاعر",
+    "translator": "🌐 مترجم",
+    "teacher": "📚 معلم",
 }
 
 
@@ -548,8 +552,7 @@ def ask_gemini(user_id, user_text):
     if result:
         return result
     print(f"[ask_gemini] خطای نهایی: {err}", flush=True)
-    short_err = err[:200] if err else "نامشخص"
-    return f"خطای AI:\n\n{short_err}"
+    return "😔 متأسفانه سرور AI الان پاسخگو نیست. چند لحظه دیگه امتحان کن!"
 
 
 def ask_gemini_with_image(user_id, image_bytes,
@@ -562,16 +565,18 @@ def ask_gemini_with_image(user_id, image_bytes,
             f"{system_prompt}\n\n"
             f"کاربر این عکس رو فرستاده و این متن رو هم نوشته:\n"
             f"«{caption}»\n\n"
-            f"لطفاً هم عکس رو تحلیل کن، هم به این متن پاسخ بده."
+            f"لطفاً هم عکس رو تحلیل کن، هم به این متن پاسخ بده. "
+            f"از ایموجی‌های مناسب استفاده کن."
         )
     else:
         prompt = (
             f"{system_prompt}\n\n"
             f"کاربر این عکس رو فرستاده (بدون متن).\n"
             f"لطفاً عکس رو کامل تحلیل کن:\n"
-            f"- چی تو عکس می‌بینی؟\n"
-            f"- اگه متن داره، بخونش\n"
-            f"- جزئیات مهم رو توضیح بده"
+            f"- چی تو عکس می‌بینی؟ 🖼️\n"
+            f"- اگه متن داره، بخونش 📖\n"
+            f"- جزئیات مهم رو توضیح بده ✨\n\n"
+            f"از ایموجی‌های مناسب استفاده کن."
         )
     image_part = types.Part.from_bytes(
         data=image_bytes,
@@ -589,8 +594,7 @@ def ask_gemini_with_image(user_id, image_bytes,
     if result:
         return result
     print(f"[ask_gemini_with_image] خطای نهایی: {err}", flush=True)
-    short_err = err[:200] if err else "نامشخص"
-    return f"خطای AI:\n\n{short_err}"
+    return "😔 متأسفانه نتونستم عکس رو تحلیل کنم. چند لحظه دیگه امتحان کن!"
 
 
 def notify_admin_text(user_id, username,
@@ -601,19 +605,21 @@ def notify_admin_text(user_id, username,
     if len(message_text) > 100:
         preview += "..."
     text = (
-        f"کاربر در حال استفاده از ربات\n\n"
-        f"نام: {full_name}\n"
-        f"یوزرنیم: @{username or '-'}\n"
-        f"آیدی: {user_id}\n\n"
-        f"پیام: {preview}"
+        f"📩 پیام جدید از کاربر\n"
+        f"➖➖➖➖➖➖➖➖\n"
+        f"👤 نام: {full_name}\n"
+        f"🆔 یوزرنیم: @{username or '-'}\n"
+        f"🔢 آیدی: {user_id}\n"
+        f"➖➖➖➖➖➖➖➖\n"
+        f"💬 پیام: {preview}"
     )
     reply_markup = {
         "inline_keyboard": [
-            [{"text": "جواب ربات",
+            [{"text": "🤖 جواب ربات",
               "callback_data": f"answer:{user_id}"}],
-            [{"text": "پاسخ دادن",
+            [{"text": "✍️ پاسخ دادن",
               "callback_data": f"reply:{user_id}"}],
-            [{"text": "بلاک",
+            [{"text": "🚫 بلاک",
               "callback_data": f"block:{user_id}"}]
         ]
     }
@@ -626,22 +632,23 @@ def notify_admin_photo(user_id, username, full_name,
         return
     reply_markup = {
         "inline_keyboard": [
-            [{"text": "جواب ربات",
+            [{"text": "🤖 جواب ربات",
               "callback_data": f"answer:{user_id}"}],
-            [{"text": "پاسخ دادن",
+            [{"text": "✍️ پاسخ دادن",
               "callback_data": f"reply:{user_id}"}],
-            [{"text": "بلاک",
+            [{"text": "🚫 بلاک",
               "callback_data": f"block:{user_id}"}]
         ]
     }
     header = (
-        f"کاربر در حال استفاده از ربات (عکس)\n\n"
-        f"نام: {full_name}\n"
-        f"یوزرنیم: @{username or '-'}\n"
-        f"آیدی: {user_id}"
+        f"🖼️ عکس جدید از کاربر\n"
+        f"➖➖➖➖➖➖➖➖\n"
+        f"👤 نام: {full_name}\n"
+        f"🆔 یوزرنیم: @{username or '-'}\n"
+        f"🔢 آیدی: {user_id}"
     )
     if caption and caption.strip():
-        header += f"\n\nکپشن: {caption[:150]}"
+        header += f"\n➖➖➖➖➖➖➖➖\n💬 کپشن: {caption[:150]}"
     tg_send_message(ADMIN_ID, header)
     tg_copy_message(
         ADMIN_ID, from_chat_id,
@@ -674,7 +681,7 @@ def handle_callback(cb):
             payload = {
                 "chat_id": user_id,
                 "message_id": message_id,
-                "text": f"حالت روی «{mode_name}» تنظیم شد."
+                "text": f"✅ حالت روی «{mode_name}» تنظیم شد."
             }
             http_session.post(url, json=payload, timeout=10)
         except Exception:
@@ -685,7 +692,7 @@ def handle_callback(cb):
         set_reply_target(user_id, target_user_id)
         tg_send_message(
             ADMIN_ID,
-            f"پیام خود را برای کاربر {target_user_id} بنویسید."
+            f"✍️ پیام خود را برای کاربر {target_user_id} بنویسید."
         )
 
     elif data.startswith("block:"):
@@ -693,7 +700,7 @@ def handle_callback(cb):
         block_user(target_user_id)
         tg_send_message(
             ADMIN_ID,
-            f"کاربر {target_user_id} بلاک شد."
+            f"🚫 کاربر {target_user_id} بلاک شد."
         )
 
     elif data.startswith("answer:"):
@@ -701,14 +708,15 @@ def handle_callback(cb):
         answer = last_answers.get(target_user_id)
         if answer:
             text = (
-                f"جواب ربات به کاربر {target_user_id}:\n\n"
+                f"🤖 جواب ربات به کاربر {target_user_id}:\n"
+                f"➖➖➖➖➖➖➖➖\n"
                 f"{answer}"
             )
             tg_send_message(ADMIN_ID, text)
         else:
             tg_send_message(
                 ADMIN_ID,
-                f"هنوز جوابی برای کاربر {target_user_id} ثبت نشده."
+                f"⚠️ هنوز جوابی برای کاربر {target_user_id} ثبت نشده."
             )
 
 
@@ -719,34 +727,36 @@ def handle_admin_message(message):
     if text == "/start":
         tg_send_message(
             admin_id,
-            "سلام ادمین!\n\n"
-            "دستورات:\n"
-            "- /users لیست کاربران\n"
-            "- /blocked لیست بلاک‌شده‌ها\n"
-            "- /unblock <id> آنبلاک کردن\n\n"
-            "برای پاسخ به کاربر، روی دکمه‌ی «پاسخ دادن» بزنید."
+            "👑 سلام ادمین عزیز!\n\n"
+            "🎛️ دستورات مدیریتی:\n"
+            "➖➖➖➖➖➖➖➖\n"
+            "👥 /users لیست کاربران\n"
+            "🚫 /blocked لیست بلاک‌شده‌ها\n"
+            "✅ /unblock <id> آنبلاک کردن\n"
+            "➖➖➖➖➖➖➖➖\n\n"
+            "💡 برای پاسخ به کاربر، روی دکمه‌ی «پاسخ دادن» بزنید."
         )
         return
 
     if text == "/users":
         users = get_all_users()
         if not users:
-            tg_send_message(admin_id, "هیچ کاربری ثبت نشده.")
+            tg_send_message(admin_id, "📭 هیچ کاربری ثبت نشده.")
             return
-        response = "لیست کاربران:\n\n"
+        response = "👥 لیست کاربران:\n➖➖➖➖➖➖➖➖\n"
         for uid, uname, fname in users[:50]:
-            response += f"- {fname} | @{uname or '-'} | {uid}\n"
+            response += f"▪️ {fname} | @{uname or '-'} | {uid}\n"
         tg_send_message(admin_id, response)
         return
 
     if text == "/blocked":
         blocked = get_blocked_users()
         if not blocked:
-            tg_send_message(admin_id, "هیچ کاربری بلاک نشده.")
+            tg_send_message(admin_id, "✅ هیچ کاربری بلاک نشده.")
             return
-        response = "کاربران بلاک‌شده:\n\n"
+        response = "🚫 کاربران بلاک‌شده:\n➖➖➖➖➖➖➖➖\n"
         for uid in blocked:
-            response += f"- {uid}\n"
+            response += f"▪️ {uid}\n"
         tg_send_message(admin_id, response)
         return
 
@@ -755,7 +765,7 @@ def handle_admin_message(message):
         if len(parts) < 2:
             tg_send_message(
                 admin_id,
-                "استفاده: /unblock <id یا یوزرنیم>"
+                "⚠️ استفاده: /unblock <id یا یوزرنیم>"
             )
             return
         target = parts[1].strip().replace("@", "")
@@ -767,13 +777,13 @@ def handle_admin_message(message):
         if not target_id:
             tg_send_message(
                 admin_id,
-                f"کاربر «{target}» پیدا نشد."
+                f"❌ کاربر «{target}» پیدا نشد."
             )
             return
         unblock_user(target_id)
         tg_send_message(
             admin_id,
-            f"کاربر {target_id} آنبلاک شد."
+            f"✅ کاربر {target_id} آنبلاک شد."
         )
         return
 
@@ -782,20 +792,23 @@ def handle_admin_message(message):
         clear_reply_target(admin_id)
         tg_send_message(
             target_user_id,
-            f"پیام سازنده:\n\n{text}"
+            f"💌 پیام سازنده:\n➖➖➖➖➖➖➖➖\n{text}"
         )
-        tg_send_message(admin_id, "پیام ارسال شد.")
+        tg_send_message(admin_id, "✅ پیام ارسال شد.")
         return
 
     tg_send_message(
         admin_id,
-        "برای پاسخ، روی دکمه‌ی «پاسخ دادن» بزنید."
+        "💡 برای پاسخ، روی دکمه‌ی «پاسخ دادن» بزنید."
     )
 
 
 def handle_text(message, chat_id, user_id,
                 username, full_name, text):
-    processing_msg = tg_send_message(chat_id, "در حال پردازش...")
+    processing_msg = tg_send_message(
+        chat_id,
+        "⏳ در حال پردازش... (چند ثانیه صبر کن)"
+    )
     processing_msg_id = None
     if processing_msg and processing_msg.get("ok"):
         processing_msg_id = processing_msg["result"]["message_id"]
@@ -805,7 +818,7 @@ def handle_text(message, chat_id, user_id,
     answer = ask_gemini(user_id, text)
     last_answers[user_id] = answer
 
-    final_text = f"پیام ربات:\n\n{answer}"
+    final_text = f"🤖 پیام ربات:\n➖➖➖➖➖➖➖➖\n{answer}"
 
     if processing_msg_id:
         tg_edit_message(chat_id, processing_msg_id, final_text)
@@ -818,7 +831,8 @@ def handle_text(message, chat_id, user_id,
 def handle_photo(message, chat_id, user_id, username,
                  full_name, caption, photo):
     processing_msg = tg_send_message(
-        chat_id, "در حال پردازش عکس..."
+        chat_id,
+        "🖼️ در حال تحلیل عکس... (چند ثانیه صبر کن)"
     )
     processing_msg_id = None
     if processing_msg and processing_msg.get("ok"):
@@ -836,8 +850,8 @@ def handle_photo(message, chat_id, user_id, username,
 
     if file_size > MAX_PHOTO_SIZE:
         error_text = (
-            "عکس خیلی بزرگه! "
-            "لطفاً عکس کوچیک‌تری بفرست (زیر ۵ مگابایت)."
+            "⚠️ عکس خیلی بزرگه! "
+            "لطفاً عکس کوچیک‌تری بفرست (زیر ۵ مگابایت). 📏"
         )
         if processing_msg_id:
             tg_edit_message(chat_id, processing_msg_id, error_text)
@@ -846,7 +860,7 @@ def handle_photo(message, chat_id, user_id, username,
         return
 
     if not image_bytes:
-        error_text = "متأسفانه نتونستم عکس رو دریافت کنم."
+        error_text = "😔 متأسفانه نتونستم عکس رو دریافت کنم."
         if processing_msg_id:
             tg_edit_message(chat_id, processing_msg_id, error_text)
         else:
@@ -864,7 +878,7 @@ def handle_photo(message, chat_id, user_id, username,
     )
     last_answers[user_id] = answer
 
-    final_text = f"پیام ربات:\n\n{answer}"
+    final_text = f"🤖 پیام ربات:\n➖➖➖➖➖➖➖➖\n{answer}"
 
     if processing_msg_id:
         tg_edit_message(chat_id, processing_msg_id, final_text)
@@ -918,7 +932,7 @@ def webhook():
         if is_blocked(user_id):
             tg_send_message(
                 chat_id,
-                "شما توسط مدیریت مسدود شده‌اید."
+                "🚫 شما توسط مدیریت مسدود شده‌اید."
             )
             return "OK", 200
 
@@ -932,12 +946,16 @@ def webhook():
         if text == "/start":
             tg_send_message(
                 chat_id,
-                "سلام\n\n"
-                "من یه دستیار هوش مصنوعی هستم.\n\n"
-                "دستورات:\n"
-                "- /mode تغییر حالت\n"
-                "- /clear پاک کردن حافظه\n\n"
-                "می‌تونی متن بفرستی یا عکس بفرستی تا تحلیلش کنم!"
+                "🌟 سلام!\n\n"
+                "🤖 من یه دستیار هوش مصنوعی هستم.\n\n"
+                "✨ کارهایی که می‌تونم انجام بدم:\n"
+                "➖➖➖➖➖➖➖➖\n"
+                "💬 جواب به سوالات\n"
+                "🖼️ تحلیل عکس\n"
+                "🎭 تغییر حالت (/mode)\n"
+                "🧹 پاک کردن حافظه (/clear)\n"
+                "➖➖➖➖➖➖➖➖\n\n"
+                "🚀 هر سوالی داری بپرس یا عکس بفرست!"
             )
             return "OK", 200
 
@@ -947,7 +965,7 @@ def webhook():
                     user_chats.pop(k, None)
             tg_send_message(
                 chat_id,
-                "حافظه‌ی مکالمه پاک شد."
+                "🧹 حافظه‌ی مکالمه پاک شد."
             )
             return "OK", 200
 
@@ -961,7 +979,7 @@ def webhook():
             reply_markup = {"inline_keyboard": keyboard}
             tg_send_message(
                 chat_id,
-                "یه حالت انتخاب کن:",
+                "🎭 یه حالت انتخاب کن:",
                 reply_markup=reply_markup
             )
             return "OK", 200
@@ -969,14 +987,14 @@ def webhook():
         if not text:
             tg_send_message(
                 chat_id,
-                "لطفاً یه پیام متنی یا عکس بفرست."
+                "📝 لطفاً یه پیام متنی یا عکس بفرست."
             )
             return "OK", 200
 
         if not check_rate_limit(user_id):
             tg_send_message(
                 chat_id,
-                "شما هر دقیقه فقط ۴ پیام می‌تونید بفرستید. لطفاً کمی صبر کنید."
+                "⏳ شما هر دقیقه فقط ۴ پیام می‌تونید بفرستید. کمی صبر کنید."
             )
             return "OK", 200
 
