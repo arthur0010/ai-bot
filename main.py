@@ -32,10 +32,13 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 DB_NAME = "bot.db"
 MAX_PHOTO_SIZE = 5 * 1024 * 1024
 CACHE_TTL = 300
+ANSWER_TTL = 600
 MAX_CHATS = 100
+MAX_ANSWERS = 200
 RATE_LIMIT = 4
 GEMINI_MIN_INTERVAL = 2
 GEMINI_MODEL = "gemini-3.6-flash"
+MIN_DISPLAY_TIME = 1.5
 
 http_session = requests.Session()
 _adapter = HTTPAdapter(
@@ -48,10 +51,40 @@ http_session.mount("http://", _adapter)
 
 flask_app = Flask(__name__)
 
+MODES = {
+    "default": (
+        "تو یه دستیار هوشمند، مفید و خوش‌برخورد هستی. "
+        "همیشه به زبان فارسی و واضح جواب بده. "
+        "برای جذاب‌تر شدن، از ایموجی‌های مناسب استفاده کن."
+    ),
+    "poet": (
+        "تو یه شاعر فارسی‌زبان هستی. "
+        "جواب‌هات رو به صورت شعر و ادبی بده. "
+        "برای زیبایی بیشتر، از ایموجی‌های شاعرانه استفاده کن."
+    ),
+    "translator": (
+        "تو یه مترجم حرفه‌ای هستی. "
+        "متن‌ها رو به فارسی یا انگلیسی ترجمه کن."
+    ),
+    "teacher": (
+        "تو یه معلم صبور و دقیق هستی. "
+        "مفاهیم رو ساده و با مثال توضیح بده. "
+        "برای جذاب‌تر شدن، از ایموجی‌های آموزشی استفاده کن."
+    ),
+}
+
+MODE_NAMES = {
+    "default": "🤖 پیش‌فرض",
+    "poet": "🌹 شاعر",
+    "translator": "🌐 مترجم",
+    "teacher": "📚 معلم",
+}
+
 _mode_cache = {}
 _blocked_cache = {}
 user_chats = {}
 last_answers = {}
+answers_ts = {}
 GEMINI_LOCK = threading.Lock()
 _last_gemini_call = [0]
 _key_index = [0]
@@ -94,10 +127,24 @@ def _cleanup_cache():
         keys = list(user_chats.keys())
         for k in keys[:len(keys) // 2]:
             user_chats.pop(k, None)
-    if len(last_answers) > MAX_CHATS * 2:
+    now = time.time()
+    expired = [
+        k for k, ts in answers_ts.items()
+        if now - ts > ANSWER_TTL
+    ]
+    for k in expired:
+        last_answers.pop(k, None)
+        answers_ts.pop(k, None)
+    if len(last_answers) > MAX_ANSWERS:
         keys = list(last_answers.keys())
         for k in keys[:len(keys) // 2]:
             last_answers.pop(k, None)
+            answers_ts.pop(k, None)
+
+
+def _save_answer(user_id, answer):
+    last_answers[user_id] = answer
+    answers_ts[user_id] = time.time()
 
 
 def _db_connect():
@@ -260,6 +307,8 @@ def get_user_mode(user_id):
     finally:
         conn.close()
     mode = result[0] if result else "default"
+    if mode not in MODES:
+        mode = "default"
     _cache_set(_mode_cache, user_id, mode)
     return mode
 
@@ -354,16 +403,16 @@ def check_rate_limit(user_id):
         conn.close()
 
 
-def get_user_chat(user_id, client):
-    key = f"{user_id}_{id(client)}"
+def get_user_chat(user_id, client_index):
+    key = f"{user_id}_{client_index}"
     if key not in user_chats:
-        user_chats[key] = client.chats.create(
+        user_chats[key] = gemini_clients[client_index].chats.create(
             model=GEMINI_MODEL
         )
     return user_chats[key]
 
 
-def tg_request(method, payload, timeout=15):
+def tg_request(method, payload, timeout=10):
     try:
         url = f"{TELEGRAM_API}/{method}"
         r = http_session.post(url, json=payload, timeout=timeout)
@@ -447,42 +496,6 @@ def tg_get_file(file_id):
         return None, None, 0
 
 
-MODES = {
-    "default": (
-        "تو یه دستیار هوشمند، مفید و خوش‌برخورد هستی. "
-        "همیشه به زبان فارسی و واضح جواب بده. "
-        "برای جذاب‌تر شدن، از ایموجی‌های مناسب استفاده کن."
-    ),
-    "coder": (
-        "تو یه برنامه‌نویس حرفه‌ای هستی. "
-        "به سوالات برنامه‌نویسی با کد و توضیح کامل جواب بده. "
-        "برای جذاب‌تر شدن، از ایموجی‌های مناسب استفاده کن."
-    ),
-    "poet": (
-        "تو یه شاعر فارسی‌زبان هستی. "
-        "جواب‌هات رو به صورت شعر و ادبی بده. "
-        "برای زیبایی بیشتر، از ایموجی‌های شاعرانه استفاده کن."
-    ),
-    "translator": (
-        "تو یه مترجم حرفه‌ای هستی. "
-        "متن‌ها رو به فارسی یا انگلیسی ترجمه کن."
-    ),
-    "teacher": (
-        "تو یه معلم صبور و دقیق هستی. "
-        "مفاهیم رو ساده و با مثال توضیح بده. "
-        "برای جذاب‌تر شدن، از ایموجی‌های آموزشی استفاده کن."
-    ),
-}
-
-MODE_NAMES = {
-    "default": "🤖 پیش‌فرض",
-    "coder": "💻 برنامه‌نویس",
-    "poet": "🌹 شاعر",
-    "translator": "🌐 مترجم",
-    "teacher": "📚 معلم",
-}
-
-
 def _wait_for_gemini_slot():
     with GEMINI_LOCK:
         now = time.time()
@@ -504,8 +517,6 @@ def _is_quota_error(err_str):
 
 def _try_all_keys(func):
     total = len(gemini_clients)
-    print("=" * 50, flush=True)
-    print(f"[key_rotation] شروع چرخش بین {total} کلید", flush=True)
     if total == 0:
         return None, "کلید Gemini تنظیم نشده."
     start_index = _key_index[0]
@@ -514,22 +525,19 @@ def _try_all_keys(func):
         idx = (start_index + offset) % total
         try:
             print(f"[key_rotation] تلاش با کلید {idx + 1}...", flush=True)
-            result = func(gemini_clients[idx])
+            result = func(idx)
             print(f"[key_rotation] ✅ کلید {idx + 1} موفق شد", flush=True)
-            print("=" * 50, flush=True)
             _key_index[0] = idx
             return result, None
         except Exception as e:
             err_str = str(e)
             print(f"[key_rotation] ❌ کلید {idx + 1} خطا:", flush=True)
-            print(err_str[:500], flush=True)
-            print("-" * 50, flush=True)
+            print(err_str[:300], flush=True)
             last_error = err_str
             if _is_quota_error(err_str):
-                time.sleep(1)
+                time.sleep(0.5)
                 continue
             continue
-    print("=" * 50, flush=True)
     return None, last_error or "همه‌ی کلیدها خطا دادند."
 
 
@@ -541,8 +549,8 @@ def ask_gemini(user_id, user_text):
         f"{system_prompt}\n\nسوال کاربر: {user_text}"
     )
 
-    def _call(c):
-        chat = get_user_chat(user_id, c)
+    def _call(idx):
+        chat = get_user_chat(user_id, idx)
         response = chat.send_message(full_prompt)
         if response and response.text:
             return response.text.strip()
@@ -583,8 +591,8 @@ def ask_gemini_with_image(user_id, image_bytes,
         mime_type=mime_type
     )
 
-    def _call(c):
-        chat = get_user_chat(user_id, c)
+    def _call(idx):
+        chat = get_user_chat(user_id, idx)
         response = chat.send_message([image_part, prompt])
         if response and response.text:
             return response.text.strip()
@@ -805,6 +813,8 @@ def handle_admin_message(message):
 
 def handle_text(message, chat_id, user_id,
                 username, full_name, text):
+    start_time = time.time()
+
     processing_msg = tg_send_message(
         chat_id,
         "⏳ در حال پردازش... (چند ثانیه صبر کن)"
@@ -816,7 +826,12 @@ def handle_text(message, chat_id, user_id,
     notify_admin_text(user_id, username, full_name, text)
 
     answer = ask_gemini(user_id, text)
-    last_answers[user_id] = answer
+
+    elapsed = time.time() - start_time
+    if elapsed < MIN_DISPLAY_TIME:
+        time.sleep(MIN_DISPLAY_TIME - elapsed)
+
+    _save_answer(user_id, answer)
 
     final_text = f"🤖 پیام ربات:\n➖➖➖➖➖➖➖➖\n{answer}"
 
@@ -830,6 +845,8 @@ def handle_text(message, chat_id, user_id,
 
 def handle_photo(message, chat_id, user_id, username,
                  full_name, caption, photo):
+    start_time = time.time()
+
     processing_msg = tg_send_message(
         chat_id,
         "🖼️ در حال تحلیل عکس... (چند ثانیه صبر کن)"
@@ -876,7 +893,12 @@ def handle_photo(message, chat_id, user_id, username,
     answer = ask_gemini_with_image(
         user_id, image_bytes, mime_type, caption
     )
-    last_answers[user_id] = answer
+
+    elapsed = time.time() - start_time
+    if elapsed < MIN_DISPLAY_TIME:
+        time.sleep(MIN_DISPLAY_TIME - elapsed)
+
+    _save_answer(user_id, answer)
 
     final_text = f"🤖 پیام ربات:\n➖➖➖➖➖➖➖➖\n{answer}"
 
