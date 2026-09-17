@@ -22,7 +22,7 @@ DB_NAME = "bot.db"
 MAX_PHOTO_SIZE = 5 * 1024 * 1024
 CACHE_TTL = 300
 MAX_CHATS = 100
-RATE_LIMIT = 3
+RATE_LIMIT = 4
 
 client = genai.Client(
     api_key=GEMINI_API_KEY,
@@ -79,7 +79,6 @@ def _cleanup_cache():
 
 def _db_connect():
     conn = sqlite3.connect(DB_NAME, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA temp_store=MEMORY")
     return conn
@@ -118,6 +117,7 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_rate_user_time "
         "ON rate_limit(user_id, timestamp)"
     )
+    c.execute("DELETE FROM rate_limit")
     conn.commit()
     conn.close()
 
@@ -900,7 +900,7 @@ def webhook():
         if not check_rate_limit(user_id):
             tg_send_message(
                 chat_id,
-                "محدودیت! هر دقیقه فقط ۳ پیام."
+                "محدودیت! هر دقیقه فقط ۴ پیام."
             )
             return "OK", 200
 
