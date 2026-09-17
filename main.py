@@ -17,6 +17,7 @@ print(f"ADMIN_ID = '{ADMIN_ID}' (len={len(ADMIN_ID)})")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 DB_NAME = "bot.db"
 MAX_PHOTO_SIZE = 5 * 1024 * 1024
+CACHE_TTL = 60
 
 client = genai.Client(
     api_key=GEMINI_API_KEY,
@@ -28,7 +29,6 @@ flask_app = Flask(__name__)
 
 _mode_cache = {}
 _blocked_cache = {}
-CACHE_TTL = 60
 
 
 def _cache_get(cache, key):
@@ -48,14 +48,39 @@ def _db_connect():
     return sqlite3.connect(DB_NAME, timeout=10)
 
 
+def _now_str():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def init_db():
     conn = _db_connect()
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, mode TEXT DEFAULT 'default', last_seen TEXT)")
-    c.execute("CREATE TABLE IF NOT EXISTS blocked (user_id INTEGER PRIMARY KEY)")
-    c.execute("CREATE TABLE IF NOT EXISTS rate_limit (user_id INTEGER, timestamp TEXT)")
-    c.execute("CREATE TABLE IF NOT EXISTS reply_state (admin_id INTEGER PRIMARY KEY, target_id INTEGER)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_rate_user_time ON rate_limit(user_id, timestamp)")
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS users ("
+        "user_id INTEGER PRIMARY KEY, "
+        "username TEXT, "
+        "full_name TEXT, "
+        "mode TEXT DEFAULT 'default', "
+        "last_seen TEXT)"
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS blocked ("
+        "user_id INTEGER PRIMARY KEY)"
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS rate_limit ("
+        "user_id INTEGER, "
+        "timestamp TEXT)"
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS reply_state ("
+        "admin_id INTEGER PRIMARY KEY, "
+        "target_id INTEGER)"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rate_user_time "
+        "ON rate_limit(user_id, timestamp)"
+    )
     conn.commit()
     conn.close()
 
@@ -63,8 +88,16 @@ def init_db():
 def save_user(user_id, username, full_name):
     conn = _db_connect()
     c = conn.cursor()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT INTO users (user_id, username, full_name, last_seen) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, full_name = excluded.full_name, last_seen = excluded.last_seen", (user_id, username, full_name, now))
+    now = _now_str()
+    c.execute(
+        "INSERT INTO users (user_id, username, full_name, last_seen) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET "
+        "username = excluded.username, "
+        "full_name = excluded.full_name, "
+        "last_seen = excluded.last_seen",
+        (user_id, username, full_name, now)
+    )
     conn.commit()
     conn.close()
 
@@ -104,7 +137,10 @@ def unblock_user(user_id):
 def get_all_users():
     conn = _db_connect()
     c = conn.cursor()
-    c.execute("SELECT user_id, username, full_name FROM users ORDER BY last_seen DESC")
+    c.execute(
+        "SELECT user_id, username, full_name FROM users "
+        "ORDER BY last_seen DESC"
+    )
     rows = c.fetchall()
     conn.close()
     return rows
@@ -154,7 +190,11 @@ def set_user_mode(user_id, mode):
 def set_reply_target(admin_id, target_id):
     conn = _db_connect()
     c = conn.cursor()
-    c.execute("INSERT INTO reply_state (admin_id, target_id) VALUES (?, ?) ON CONFLICT(admin_id) DO UPDATE SET target_id = excluded.target_id", (admin_id, target_id))
+    c.execute(
+        "INSERT INTO reply_state (admin_id, target_id) VALUES (?, ?) "
+        "ON CONFLICT(admin_id) DO UPDATE SET target_id = excluded.target_id",
+        (admin_id, target_id)
+    )
     conn.commit()
     conn.close()
 
@@ -162,7 +202,10 @@ def set_reply_target(admin_id, target_id):
 def get_reply_target(admin_id):
     conn = _db_connect()
     c = conn.cursor()
-    c.execute("SELECT target_id FROM reply_state WHERE admin_id = ?", (admin_id,))
+    c.execute(
+        "SELECT target_id FROM reply_state WHERE admin_id = ?",
+        (admin_id,)
+    )
     result = c.fetchone()
     conn.close()
     return result[0] if result else None
@@ -180,14 +223,25 @@ def check_rate_limit(user_id):
     conn = _db_connect()
     c = conn.cursor()
     now = datetime.now()
-    one_minute_ago = (now - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("SELECT COUNT(*) FROM rate_limit WHERE user_id = ? AND timestamp > ?", (user_id, one_minute_ago))
+    one_min_ago = (now - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+    c.execute(
+        "SELECT COUNT(*) FROM rate_limit "
+        "WHERE user_id = ? AND timestamp > ?",
+        (user_id, one_min_ago)
+    )
     count = c.fetchone()[0]
     if count >= 4:
         conn.close()
         return False
-    c.execute("INSERT INTO rate_limit (user_id, timestamp) VALUES (?, ?)", (user_id, now.strftime("%Y-%m-%d %H:%M:%S")))
-    c.execute("DELETE FROM rate_limit WHERE timestamp < ?", ((now - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")))
+    c.execute(
+        "INSERT INTO rate_limit (user_id, timestamp) VALUES (?, ?)",
+        (user_id, now.strftime("%Y-%m-%d %H:%M:%S"))
+    )
+    ten_min_ago = (now - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+    c.execute(
+        "DELETE FROM rate_limit WHERE timestamp < ?",
+        (ten_min_ago,)
+    )
     conn.commit()
     conn.close()
     return True
@@ -204,7 +258,8 @@ def get_user_chat(user_id):
 
 def tg_request(method, payload, timeout=15):
     try:
-        r = http_session.post(f"{TELEGRAM_API}/{method}", json=payload, timeout=timeout)
+        url = f"{TELEGRAM_API}/{method}"
+        r = http_session.post(url, json=payload, timeout=timeout)
         return r.json()
     except Exception as e:
         print(f"[tg_request:{method}] خطا: {e}")
@@ -235,13 +290,19 @@ def tg_edit_message(chat_id, message_id, text, reply_markup=None, parse_mode=Non
 
 def tg_send_typing(chat_id):
     try:
-        http_session.post(f"{TELEGRAM_API}/sendChatAction", json={"chat_id": chat_id, "action": "typing"}, timeout=5)
+        url = f"{TELEGRAM_API}/sendChatAction"
+        payload = {"chat_id": chat_id, "action": "typing"}
+        http_session.post(url, json=payload, timeout=5)
     except Exception:
         pass
 
 
 def tg_copy_message(to_chat_id, from_chat_id, message_id, reply_markup=None):
-    payload = {"chat_id": to_chat_id, "from_chat_id": from_chat_id, "message_id": message_id}
+    payload = {
+        "chat_id": to_chat_id,
+        "from_chat_id": from_chat_id,
+        "message_id": message_id,
+    }
     if reply_markup:
         payload["reply_markup"] = reply_markup
     return tg_request("copyMessage", payload, timeout=30)
@@ -249,7 +310,8 @@ def tg_copy_message(to_chat_id, from_chat_id, message_id, reply_markup=None):
 
 def tg_get_file(file_id):
     try:
-        r = http_session.get(f"{TELEGRAM_API}/getFile", params={"file_id": file_id}, timeout=15)
+        url = f"{TELEGRAM_API}/getFile"
+        r = http_session.get(url, params={"file_id": file_id}, timeout=15)
         data = r.json()
         if not data.get("ok"):
             return None, None, 0
@@ -289,7 +351,8 @@ def ask_gemini(user_id, user_text):
             mode = get_user_mode(user_id)
             system_prompt = MODES.get(mode, MODES["default"])
             chat = get_user_chat(user_id)
-            response = chat.send_message(f"{system_prompt}\n\nسوال کاربر: {user_text}")
+            full_prompt = f"{system_prompt}\n\nسوال کاربر: {user_text}"
+            response = chat.send_message(full_prompt)
             if response and response.text:
                 return response.text.strip()
             return "متأسفانه نتونستم جواب بدم. دوباره امتحان کن."
@@ -313,10 +376,25 @@ def ask_gemini_with_image(user_id, image_bytes, mime_type, caption=""):
         mode = get_user_mode(user_id)
         system_prompt = MODES.get(mode, MODES["default"])
         if caption and caption.strip():
-            prompt = f"{system_prompt}\n\nکاربر این عکس رو فرستاده و این متن رو هم نوشته:\n«{caption}»\n\nلطفاً هم عکس رو تحلیل کن، هم به این متن پاسخ بده."
+            prompt = (
+                f"{system_prompt}\n\n"
+                f"کاربر این عکس رو فرستاده و این متن رو هم نوشته:\n"
+                f"«{caption}»\n\n"
+                f"لطفاً هم عکس رو تحلیل کن، هم به این متن پاسخ بده."
+            )
         else:
-            prompt = f"{system_prompt}\n\nکاربر این عکس رو فرستاده (بدون متن).\nلطفاً عکس رو کامل تحلیل کن:\n- چی تو عکس می‌بینی؟\n- اگه متن داره، بخونش\n- جزئیات مهم رو توضیح بده"
-        image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+            prompt = (
+                f"{system_prompt}\n\n"
+                f"کاربر این عکس رو فرستاده (بدون متن).\n"
+                f"لطفاً عکس رو کامل تحلیل کن:\n"
+                f"- چی تو عکس می‌بینی؟\n"
+                f"- اگه متن داره، بخونش\n"
+                f"- جزئیات مهم رو توضیح بده"
+            )
+        image_part = types.Part.from_bytes(
+            data=image_bytes,
+            mime_type=mime_type
+        )
         chat = get_user_chat(user_id)
         response = chat.send_message([image_part, prompt])
         if response and response.text:
@@ -330,16 +408,40 @@ def ask_gemini_with_image(user_id, image_bytes, mime_type, caption=""):
 def notify_admin_text(user_id, username, full_name, message_text):
     if not ADMIN_ID:
         return
-    text = f"کاربر در حال استفاده از ربات\n\nنام: {full_name}\nیوزرنیم: @{username or '-'}\nآیدی: {user_id}\n\nپیام: {message_text[:100]}{'...' if len(message_text) > 100 else ''}"
-    reply_markup = {"inline_keyboard": [[{"text": "پاسخ دادن", "callback_data": f"reply:{user_id}"}], [{"text": "بلاک", "callback_data": f"block:{user_id}"}]]}
+    preview = message_text[:100]
+    if len(message_text) > 100:
+        preview += "..."
+    text = (
+        f"کاربر در حال استفاده از ربات\n\n"
+        f"نام: {full_name}\n"
+        f"یوزرنیم: @{username or '-'}\n"
+        f"آیدی: {user_id}\n\n"
+        f"پیام: {preview}"
+    )
+    reply_markup = {
+        "inline_keyboard": [
+            [{"text": "پاسخ دادن", "callback_data": f"reply:{user_id}"}],
+            [{"text": "بلاک", "callback_data": f"block:{user_id}"}]
+        ]
+    }
     tg_send_message(ADMIN_ID, text, reply_markup=reply_markup)
 
 
 def notify_admin_photo(user_id, username, full_name, caption, from_chat_id, message_id):
     if not ADMIN_ID:
         return
-    reply_markup = {"inline_keyboard": [[{"text": "پاسخ دادن", "callback_data": f"reply:{user_id}"}], [{"text": "بلاک", "callback_data": f"block:{user_id}"}]]}
-    header = f"کاربر در حال استفاده از ربات (عکس)\n\nنام: {full_name}\nیوزرنیم: @{username or '-'}\nآیدی: {user_id}"
+    reply_markup = {
+        "inline_keyboard": [
+            [{"text": "پاسخ دادن", "callback_data": f"reply:{user_id}"}],
+            [{"text": "بلاک", "callback_data": f"block:{user_id}"}]
+        ]
+    }
+    header = (
+        f"کاربر در حال استفاده از ربات (عکس)\n\n"
+        f"نام: {full_name}\n"
+        f"یوزرنیم: @{username or '-'}\n"
+        f"آیدی: {user_id}"
+    )
     if caption and caption.strip():
         header += f"\n\nکپشن: {caption[:150]}"
     tg_send_message(ADMIN_ID, header)
@@ -352,20 +454,31 @@ def handle_callback(cb):
     cb_id = cb["id"]
     message_id = cb["message"]["message_id"]
     try:
-        http_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
+        url = f"{TELEGRAM_API}/answerCallbackQuery"
+        http_session.post(url, json={"callback_query_id": cb_id}, timeout=5)
     except Exception:
         pass
     if data.startswith("mode:"):
         mode = data.split(":")[1]
         set_user_mode(user_id, mode)
         try:
-            http_session.post(f"{TELEGRAM_API}/editMessageText", json={"chat_id": user_id, "message_id": message_id, "text": f"حالت روی «{MODE_NAMES.get(mode, mode)}» تنظیم شد."}, timeout=10)
+            mode_name = MODE_NAMES.get(mode, mode)
+            url = f"{TELEGRAM_API}/editMessageText"
+            payload = {
+                "chat_id": user_id,
+                "message_id": message_id,
+                "text": f"حالت روی «{mode_name}» تنظیم شد."
+            }
+            http_session.post(url, json=payload, timeout=10)
         except Exception:
             pass
     elif data.startswith("reply:"):
         target_user_id = int(data.split(":")[1])
         set_reply_target(user_id, target_user_id)
-        tg_send_message(ADMIN_ID, f"پیام خود را برای کاربر {target_user_id} بنویسید.")
+        tg_send_message(
+            ADMIN_ID,
+            f"پیام خود را برای کاربر {target_user_id} بنویسید."
+        )
     elif data.startswith("block:"):
         target_user_id = int(data.split(":")[1])
         block_user(target_user_id)
@@ -376,7 +489,15 @@ def handle_admin_message(message):
     text = message.get("text", "")
     admin_id = message["from"]["id"]
     if text == "/start":
-        tg_send_message(admin_id, "سلام ادمین!\n\nدستورات:\n- /users لیست کاربران\n- /blocked لیست بلاک‌شده‌ها\n- /unblock <id یا یوزرنیم> آنبلاک کردن\n\nبرای پاسخ به کاربر، روی دکمه‌ی «پاسخ دادن» زیر پیام کاربر بزنید.")
+        tg_send_message(
+            admin_id,
+            "سلام ادمین!\n\n"
+            "دستورات:\n"
+            "- /users لیست کاربران\n"
+            "- /blocked لیست بلاک‌شده‌ها\n"
+            "- /unblock <id یا یوزرنیم> آنبلاک کردن\n\n"
+            "برای پاسخ به کاربر، روی دکمه‌ی «پاسخ دادن» زیر پیام کاربر بزنید."
+        )
         return
     if text == "/users":
         users = get_all_users()
@@ -421,7 +542,10 @@ def handle_admin_message(message):
         tg_send_message(target_user_id, f"پیام سازنده:\n\n{text}")
         tg_send_message(admin_id, "پیام ارسال شد.")
         return
-    tg_send_message(admin_id, "برای پاسخ، روی دکمه‌ی «پاسخ دادن» زیر پیام کاربر بزنید.")
+    tg_send_message(
+        admin_id,
+        "برای پاسخ، روی دکمه‌ی «پاسخ دادن» زیر پیام کاربر بزنید."
+    )
 
 
 @flask_app.route("/", methods=["GET"])
@@ -462,45 +586,18 @@ def webhook():
             tg_send_message(chat_id, "شما توسط مدیریت مسدود شده‌اید.")
             return "OK", 200
         if photo:
-            if not check_rate_limit(user_id):
-                tg_send_message(chat_id, "محدودیت! هر دقیقه فقط ۴ پیام می‌تونی بفرستی.")
-                return "OK", 200
-            processing_msg = tg_send_message(chat_id, "در حال پردازش عکس...")
-            processing_msg_id = None
-            if processing_msg and processing_msg.get("ok"):
-                processing_msg_id = processing_msg["result"]["message_id"]
-            largest_photo = photo[-1]
-            file_id = largest_photo["file_id"]
-            notify_admin_photo(user_id, username, full_name, caption, chat_id, message["message_id"])
-            image_bytes, file_path, file_size = tg_get_file(file_id)
-            if file_size > MAX_PHOTO_SIZE:
-                error_text = "عکس خیلی بزرگه! لطفاً عکس کوچیک‌تری بفرست (زیر ۵ مگابایت)."
-                if processing_msg_id:
-                    tg_edit_message(chat_id, processing_msg_id, error_text)
-                else:
-                    tg_send_message(chat_id, error_text)
-                return "OK", 200
-            if not image_bytes:
-                error_text = "متأسفانه نتونستم عکس رو دریافت کنم. دوباره امتحان کن."
-                if processing_msg_id:
-                    tg_edit_message(chat_id, processing_msg_id, error_text)
-                else:
-                    tg_send_message(chat_id, error_text)
-                return "OK", 200
-            mime_type = "image/jpeg"
-            if file_path and file_path.lower().endswith(".png"):
-                mime_type = "image/png"
-            elif file_path and file_path.lower().endswith(".webp"):
-                mime_type = "image/webp"
-            answer = ask_gemini_with_image(user_id, image_bytes, mime_type, caption)
-            final_text = f"پیام ربات:\n\n{answer}"
-            if processing_msg_id:
-                tg_edit_message(chat_id, processing_msg_id, final_text)
-            else:
-                tg_send_message(chat_id, final_text)
+            handle_photo(message, chat_id, user_id, username, full_name, caption, photo)
             return "OK", 200
         if text == "/start":
-            tg_send_message(chat_id, "سلام\n\nمن یه دستیار هوش مصنوعی هستم.\n\nدستورات:\n- /mode تغییر حالت\n- /clear پاک کردن حافظه\n\nمی‌تونی متن بفرستی یا عکس بفرستی تا تحلیلش کنم!")
+            tg_send_message(
+                chat_id,
+                "سلام\n\n"
+                "من یه دستیار هوش مصنوعی هستم.\n\n"
+                "دستورات:\n"
+                "- /mode تغییر حالت\n"
+                "- /clear پاک کردن حافظه\n\n"
+                "می‌تونی متن بفرستی یا عکس بفرستی تا تحلیلش کنم!"
+            )
             return "OK", 200
         if text == "/clear":
             user_chats.pop(user_id, None)
@@ -519,24 +616,68 @@ def webhook():
         if not check_rate_limit(user_id):
             tg_send_message(chat_id, "محدودیت! هر دقیقه فقط ۴ پیام می‌تونی بفرستی.")
             return "OK", 200
-        processing_msg = tg_send_message(chat_id, "در حال پردازش...")
-        processing_msg_id = None
-        if processing_msg and processing_msg.get("ok"):
-            processing_msg_id = processing_msg["result"]["message_id"]
-        notify_admin_text(user_id, username, full_name, text)
-        answer = ask_gemini(user_id, text)
-        final_text = f"پیام ربات:\n\n{answer}"
-        if processing_msg_id:
-            tg_edit_message(chat_id, processing_msg_id, final_text)
-        else:
-            tg_send_message(chat_id, final_text)
+        handle_text(message, chat_id, user_id, username, full_name, text)
         return "OK", 200
     except Exception as e:
         print(f"[webhook] خطا: {e}")
         import traceback
         traceback.print_exc()
         return "OK", 200
-        
+
+
+def handle_photo(message, chat_id, user_id, username, full_name, caption, photo):
+    processing_msg = tg_send_message(chat_id, "در حال پردازش عکس...")
+    processing_msg_id = None
+    if processing_msg and processing_msg.get("ok"):
+        processing_msg_id = processing_msg["result"]["message_id"]
+    largest_photo = photo[-1]
+    file_id = largest_photo["file_id"]
+    notify_admin_photo(
+        user_id, username, full_name, caption,
+        chat_id, message["message_id"]
+    )
+    image_bytes, file_path, file_size = tg_get_file(file_id)
+    if file_size > MAX_PHOTO_SIZE:
+        error_text = "عکس خیلی بزرگه! لطفاً عکس کوچیک‌تری بفرست (زیر ۵ مگابایت)."
+        if processing_msg_id:
+            tg_edit_message(chat_id, processing_msg_id, error_text)
+        else:
+            tg_send_message(chat_id, error_text)
+        return
+    if not image_bytes:
+        error_text = "متأسفانه نتونستم عکس رو دریافت کنم. دوباره امتحان کن."
+        if processing_msg_id:
+            tg_edit_message(chat_id, processing_msg_id, error_text)
+        else:
+            tg_send_message(chat_id, error_text)
+        return
+    mime_type = "image/jpeg"
+    if file_path and file_path.lower().endswith(".png"):
+        mime_type = "image/png"
+    elif file_path and file_path.lower().endswith(".webp"):
+        mime_type = "image/webp"
+    answer = ask_gemini_with_image(user_id, image_bytes, mime_type, caption)
+    final_text = f"پیام ربات:\n\n{answer}"
+    if processing_msg_id:
+        tg_edit_message(chat_id, processing_msg_id, final_text)
+    else:
+        tg_send_message(chat_id, final_text)
+
+
+def handle_text(message, chat_id, user_id, username, full_name, text):
+    processing_msg = tg_send_message(chat_id, "در حال پردازش...")
+    processing_msg_id = None
+    if processing_msg and processing_msg.get("ok"):
+        processing_msg_id = processing_msg["result"]["message_id"]
+    notify_admin_text(user_id, username, full_name, text)
+    answer = ask_gemini(user_id, text)
+    final_text = f"پیام ربات:\n\n{answer}"
+    if processing_msg_id:
+        tg_edit_message(chat_id, processing_msg_id, final_text)
+    else:
+        tg_send_message(chat_id, final_text)
+
+
 def setup_webhook():
     if not RENDER_URL:
         return
@@ -544,7 +685,9 @@ def setup_webhook():
     print(f"Webhook: {webhook_url}")
     try:
         http_session.get(f"{TELEGRAM_API}/deleteWebhook", timeout=15)
-        r = http_session.get(f"{TELEGRAM_API}/setWebhook", params={"url": webhook_url, "drop_pending_updates": True}, timeout=15)
+        url = f"{TELEGRAM_API}/setWebhook"
+        params = {"url": webhook_url, "drop_pending_updates": True}
+        r = http_session.get(url, params=params, timeout=15)
         print(f"Webhook ست شد: {r.json()}")
     except Exception as e:
         print(f"خطا: {e}")
