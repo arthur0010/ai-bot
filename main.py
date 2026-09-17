@@ -35,10 +35,10 @@ CACHE_TTL = 300
 ANSWER_TTL = 600
 MAX_CHATS = 100
 MAX_ANSWERS = 200
-RATE_LIMIT = 4
+RATE_LIMIT = 5
 GEMINI_MIN_INTERVAL = 2
 GEMINI_MODEL = "gemini-3.6-flash"
-MIN_DISPLAY_TIME = 1.5
+MIN_DISPLAY_TIME = 0.5
 
 SPAM_REPEAT_LIMIT = 3
 SPAM_SHORT_LIMIT = 8
@@ -48,9 +48,9 @@ SPAM_WINDOW = 60
 
 http_session = requests.Session()
 _adapter = HTTPAdapter(
-    pool_connections=20,
-    pool_maxsize=50,
-    max_retries=Retry(total=2, backoff_factor=0.3)
+    pool_connections=30,
+    pool_maxsize=100,
+    max_retries=Retry(total=1, backoff_factor=0.2)
 )
 http_session.mount("https://", _adapter)
 http_session.mount("http://", _adapter)
@@ -474,9 +474,6 @@ def check_spam(user_id, text):
         })
         user_message_history[user_id] = history
 
-        if len(history) >= SPAM_REPEAT_LIMIT + 1:
-            return {"action": "warn", "remaining": 0}
-
         return {"action": "ok", "remaining": 0}
 
 
@@ -547,7 +544,7 @@ def tg_send_typing(chat_id):
     try:
         url = f"{TELEGRAM_API}/sendChatAction"
         payload = {"chat_id": chat_id, "action": "typing"}
-        http_session.post(url, json=payload, timeout=5)
+        http_session.post(url, json=payload, timeout=3)
     except Exception:
         pass
 
@@ -629,7 +626,7 @@ def _try_all_keys(func):
             print(err_str[:300], flush=True)
             last_error = err_str
             if _is_quota_error(err_str):
-                time.sleep(0.5)
+                time.sleep(0.3)
                 continue
             continue
     return None, last_error or "همه‌ی کلیدها خطا دادند."
@@ -912,13 +909,20 @@ def handle_text(message, chat_id, user_id,
 
     processing_msg = tg_send_message(
         chat_id,
-        "⏳ در حال پردازش... (چند ثانیه صبر کن)"
+        "⏳ در حال پردازش..."
     )
     processing_msg_id = None
     if processing_msg and processing_msg.get("ok"):
         processing_msg_id = processing_msg["result"]["message_id"]
 
-    notify_admin_text(user_id, username, full_name, text)
+    def _notify_bg():
+        try:
+            notify_admin_text(user_id, username, full_name, text)
+        except Exception as e:
+            print(f"[notify_bg] خطا: {e}", flush=True)
+
+    notify_thread = threading.Thread(target=_notify_bg, daemon=True)
+    notify_thread.start()
 
     answer = ask_gemini(user_id, text)
 
@@ -944,7 +948,7 @@ def handle_photo(message, chat_id, user_id, username,
 
     processing_msg = tg_send_message(
         chat_id,
-        "🖼️ در حال تحلیل عکس... (چند ثانیه صبر کن)"
+        "🖼️ در حال تحلیل عکس..."
     )
     processing_msg_id = None
     if processing_msg and processing_msg.get("ok"):
@@ -953,10 +957,17 @@ def handle_photo(message, chat_id, user_id, username,
     largest_photo = photo[-1]
     file_id = largest_photo["file_id"]
 
-    notify_admin_photo(
-        user_id, username, full_name, caption,
-        chat_id, message["message_id"]
-    )
+    def _notify_bg():
+        try:
+            notify_admin_photo(
+                user_id, username, full_name, caption,
+                chat_id, message["message_id"]
+            )
+        except Exception as e:
+            print(f"[notify_bg_photo] خطا: {e}", flush=True)
+
+    notify_thread = threading.Thread(target=_notify_bg, daemon=True)
+    notify_thread.start()
 
     image_bytes, file_path, file_size = tg_get_file(file_id)
 
@@ -1123,7 +1134,7 @@ def webhook():
         if not check_rate_limit(user_id):
             tg_send_message(
                 chat_id,
-                "⏳ شما هر دقیقه فقط ۴ پیام می‌تونید بفرستید. کمی صبر کنید."
+                "⏳ شما هر دقیقه فقط ۵ پیام می‌تونید بفرستید. کمی صبر کنید."
             )
             return "OK", 200
 
